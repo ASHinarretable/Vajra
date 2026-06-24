@@ -1,0 +1,216 @@
+# ===========================================================================
+# Shared Airflow environment — referenced by init / webserver / scheduler.
+# ===========================================================================
+x-airflow-common:
+  &airflow-common
+  build: ./airflow
+  environment:
+    &airflow-env
+    # Airflow core
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-sDGsj4K7imH65S4GsridqaRAko1ZOUD4v12MkAXdBZg=}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # Airflow metadata DB (separate from vajra data)
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    # Webserver
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-vajra-local-dev-secret}
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    # Vajra Postgres — forwarded so the DAG can query the data DB
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: ${POSTGRES_DB:-vajra}
+    POSTGRES_USER: ${POSTGRES_USER:-vajra}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vajra}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+
+
+services:
+  # ---------------------------------------------------------------------------
+  # Kafka (KRaft mode — no Zookeeper). Single broker for local development.
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: vajra-kafka
+    ports:
+      - "9092:9092"   # host access -> localhost:9092
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,HOST://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      CLUSTER_ID: vajra-cluster-000000000001
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Topic bootstrap — creates the enterprise topic set explicitly.
+  # ---------------------------------------------------------------------------
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: vajra-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      for t in transactions.raw transactions.cleaned transactions.suspicious; do
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1;
+      done;
+      echo 'Topics ready:';
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+      "
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL (vajra) — raw + processed + fraud + metrics layers.
+  # sql/init/*.sql runs automatically on first boot.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: vajra-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vajra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vajra}
+      POSTGRES_DB: ${POSTGRES_DB:-vajra}
+    volumes:
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vajra} -d ${POSTGRES_DB:-vajra}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL (Airflow metadata) — kept separate from vajra data so the two
+  # concerns never share a schema or migrations.
+  # ---------------------------------------------------------------------------
+  postgres-airflow:
+    image: postgres:16
+    container_name: vajra-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Airflow init — runs once to migrate the metadata DB and create admin user.
+  # The webserver and scheduler wait for this to complete successfully.
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: vajra-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Vajra \
+          --lastname Admin \
+          --role Admin \
+          --email admin@vajra.local
+        echo "Airflow init complete."
+    restart: on-failure
+
+  # ---------------------------------------------------------------------------
+  # Airflow webserver — UI at http://localhost:8080  (admin / admin)
+  # ---------------------------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: vajra-airflow-webserver
+    ports:
+      - "8080:8080"
+    command: webserver
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Airflow scheduler — picks up DAGs and triggers task runs on schedule.
+  # ---------------------------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: vajra-airflow-scheduler
+    command: scheduler
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Transaction generator (Python producer).
+  # ---------------------------------------------------------------------------
+  producer:
+    build: ./producer
+    container_name: vajra-producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Fraud detection / processing consumer.
+  # ---------------------------------------------------------------------------
+  consumer:
+    build: ./consumer
+    container_name: vajra-consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      POSTGRES_HOST: postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  airflow-pgdata:
+  airflow-logs:
