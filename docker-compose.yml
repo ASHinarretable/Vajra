@@ -210,7 +210,62 @@ services:
       POSTGRES_HOST: postgres
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Spark batch layer — on-demand feature backfill job. Not started by a normal
+  # `docker compose up` (it's behind the "batch" profile); run it explicitly:
+  #     docker compose run --rm spark
+  # Recomputes customer_profile + merchant_risk from full Postgres history.
+  # ---------------------------------------------------------------------------
+  spark:
+    build: ./spark
+    container_name: vajra-spark
+    profiles: ["batch"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-vajra}
+      POSTGRES_USER: ${POSTGRES_USER:-vajra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vajra}
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - "local[*]"
+      - /opt/spark/jobs/feature_backfill.py
+
+  # ---------------------------------------------------------------------------
+  # Metabase — self-service BI / dashboards. UI at http://localhost:3000
+  # First run: create an admin account, then add the vajra Postgres as a data
+  # source (host: postgres, port: 5432, db/user/pass: vajra).
+  #
+  # App metadata is stored in the metabase-data volume (Metabase's built-in
+  # H2 store) so dashboards survive restarts. For a production deploy you would
+  # point MB_DB_* at a dedicated Postgres app database instead.
+  # ---------------------------------------------------------------------------
+  metabase:
+    image: metabase/metabase:v0.50.21
+    container_name: vajra-metabase
+    ports:
+      - "3000:3000"
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+      JAVA_TIMEZONE: Asia/Kolkata
+    volumes:
+      - metabase-data:/metabase-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+    restart: unless-stopped
+
 volumes:
   pgdata:
   airflow-pgdata:
   airflow-logs:
+  metabase-data:

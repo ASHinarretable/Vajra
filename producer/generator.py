@@ -88,8 +88,11 @@ def fraud(user: UserProfile, ts: datetime, scenario: str) -> list[dict]:
     """Return one or more transactions realizing the given fraud scenario."""
     if scenario == "HIGH_VALUE":
         t = _base_txn(user, ts)
-        t["amount"] = round(user.avg_amount * random.uniform(40, 120), 2)
+        # Use a real Shopping merchant so merchant<->category stays consistent.
+        shop_merchants, _ = MERCHANTS["Shopping"]
+        t["merchant"] = random.choice(shop_merchants)
         t["merchant_category"] = "Shopping"
+        t["amount"] = round(user.avg_amount * random.uniform(40, 120), 2)
         t["status"] = "SUCCESS"
         t["_injected_fraud"] = scenario
         return [t]

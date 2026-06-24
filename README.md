@@ -101,10 +101,11 @@ payload, so `sql/queries.sql` can measure detection accuracy per scenario.
 
 ## Roadmap
 
+- [x] Airflow service in `docker-compose` + batch enrichment DAG (15-min refresh)
+- [x] PySpark batch job — `customer_profile` + `merchant_risk` from full history
+- [x] Metabase dashboards — Executive, Operations, Risk Analytics (`dashboard/provision_metabase.py`)
 - [ ] Redis for shared/scalable feature state across multiple consumers
-- [ ] Airflow service in `docker-compose` + data-quality audit DAG
-- [ ] PySpark batch job for heavy historical feature backfills
 - [ ] MinIO (S3) for raw event archival (parquet)
 - [ ] Prometheus + Grafana for pipeline health
-- [ ] Power BI executive & operations dashboards
-- [ ] Dead-letter & alerts topics; ML model on the engineered feature set
+- [ ] Dead-letter & alerts Kafka topics
+- [ ] ML model trained on the engineered feature set + rule labels
