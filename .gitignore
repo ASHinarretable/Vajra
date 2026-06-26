@@ -1,27 +1,26 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-env/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# Implementation guides (keep local, don't ship)
+ARCHITECTURE.md
+ML_TRAINING_OFFLINE.md
 
-# Env / secrets
+# Secrets
 .env
+.env.local
 *.local
 
-# Data / artifacts
-*.log
-data/
-pgdata/
-*.parquet
+# Runtime
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
 airflow/logs/
+pgdata/
+minio-data/
+prometheus-data/
+grafana-data/
+airflow-pgdata/
+airflow-logs/
 
-# OS / IDE
-.DS_Store
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp

@@ -1,0 +1,69 @@
+{
+  "title": "Vajra Pipeline Health",
+  "uid": "vajra-pipeline",
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "schemaVersion": 38,
+  "panels": [
+    {
+      "id": 1, "type": "stat", "gridPos": {"x":0,"y":0,"w":6,"h":4},
+      "title": "Throughput (txn/min)",
+      "datasource": {"uid":"vajra-prometheus"},
+      "options": {"colorMode":"background","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},
+      "fieldConfig": {"defaults":{"color":{"mode":"thresholds"},"thresholds":{"steps":[{"color":"green","value":0}]}}},
+      "targets": [{"datasource":{"uid":"vajra-prometheus"},"expr":"round(rate(vajra_txns_processed_total[1m])*60,1)","legendFormat":"txn/min"}]
+    },
+    {
+      "id": 2, "type": "stat", "gridPos": {"x":6,"y":0,"w":6,"h":4},
+      "title": "Rejection Rate (txn/min)",
+      "datasource": {"uid":"vajra-prometheus"},
+      "options": {"colorMode":"background","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},
+      "fieldConfig": {"defaults":{"color":{"mode":"thresholds"},"thresholds":{"steps":[{"color":"green","value":0},{"color":"yellow","value":0.5},{"color":"red","value":2}]}}},
+      "targets": [{"datasource":{"uid":"vajra-prometheus"},"expr":"round(rate(vajra_txns_rejected_total[1m])*60,2)","legendFormat":"rejected/min"}]
+    },
+    {
+      "id": 3, "type": "stat", "gridPos": {"x":12,"y":0,"w":6,"h":4},
+      "title": "Fraud Alerts (per min)",
+      "datasource": {"uid":"vajra-prometheus"},
+      "options": {"colorMode":"background","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},
+      "fieldConfig": {"defaults":{"color":{"mode":"thresholds"},"thresholds":{"steps":[{"color":"green","value":0},{"color":"orange","value":1},{"color":"red","value":5}]}}},
+      "targets": [{"datasource":{"uid":"vajra-prometheus"},"expr":"round(rate(vajra_fraud_alerts_total[1m])*60,2)","legendFormat":"alerts/min"}]
+    },
+    {
+      "id": 4, "type": "stat", "gridPos": {"x":18,"y":0,"w":6,"h":4},
+      "title": "p99 Latency (ms)",
+      "datasource": {"uid":"vajra-prometheus"},
+      "options": {"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"]}},
+      "fieldConfig": {"defaults":{"unit":"ms","color":{"mode":"thresholds"},"thresholds":{"steps":[{"color":"green","value":0},{"color":"yellow","value":50},{"color":"red","value":200}]}}},
+      "targets": [{"datasource":{"uid":"vajra-prometheus"},"expr":"round(histogram_quantile(0.99,rate(vajra_processing_seconds_bucket[5m]))*1000,1)","legendFormat":"p99 ms"}]
+    },
+    {
+      "id": 5, "type": "timeseries", "gridPos": {"x":0,"y":4,"w":24,"h":8},
+      "title": "Transaction Throughput vs Fraud Alerts",
+      "datasource": {"uid":"vajra-prometheus"},
+      "fieldConfig": {"defaults":{"custom":{"lineWidth":2,"fillOpacity":10}}},
+      "targets": [
+        {"datasource":{"uid":"vajra-prometheus"},"expr":"rate(vajra_txns_processed_total[1m])*60","legendFormat":"processed/min"},
+        {"datasource":{"uid":"vajra-prometheus"},"expr":"rate(vajra_fraud_alerts_total[1m])*60","legendFormat":"fraud alerts/min"}
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "gridPos": {"x":0,"y":12,"w":12,"h":8},
+      "title": "Fraud Alerts by Rule",
+      "datasource": {"uid":"vajra-prometheus"},
+      "fieldConfig": {"defaults":{"custom":{"lineWidth":2}}},
+      "targets": [{"datasource":{"uid":"vajra-prometheus"},"expr":"rate(vajra_fraud_alerts_total[1m])*60","legendFormat":"{{rule}}"}]
+    },
+    {
+      "id": 7, "type": "timeseries", "gridPos": {"x":12,"y":12,"w":12,"h":8},
+      "title": "Processing Latency Percentiles",
+      "datasource": {"uid":"vajra-prometheus"},
+      "fieldConfig": {"defaults":{"unit":"ms","custom":{"lineWidth":2}}},
+      "targets": [
+        {"datasource":{"uid":"vajra-prometheus"},"expr":"histogram_quantile(0.50,rate(vajra_processing_seconds_bucket[5m]))*1000","legendFormat":"p50"},
+        {"datasource":{"uid":"vajra-prometheus"},"expr":"histogram_quantile(0.95,rate(vajra_processing_seconds_bucket[5m]))*1000","legendFormat":"p95"},
+        {"datasource":{"uid":"vajra-prometheus"},"expr":"histogram_quantile(0.99,rate(vajra_processing_seconds_bucket[5m]))*1000","legendFormat":"p99"}
+      ]
+    }
+  ]
+}

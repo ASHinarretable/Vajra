@@ -28,11 +28,13 @@ import db
 from validation import validate, parse_time
 from features import FeatureEngine
 from rules import evaluate
+from scorer import Scorer
 
 BOOTSTRAP    = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC_RAW    = os.getenv("TOPIC_RAW",        "transactions.raw")
 TOPIC_CLEANED    = os.getenv("TOPIC_CLEANED",    "transactions.cleaned")
 TOPIC_SUSPICIOUS = os.getenv("TOPIC_SUSPICIOUS", "transactions.suspicious")
+TOPIC_DLQ    = os.getenv("TOPIC_DLQ",        "transactions.dead-letter")
 GROUP        = os.getenv("CONSUMER_GROUP",    "vajra-fraud-consumer")
 REDIS_URL    = os.getenv("REDIS_URL")
 METRICS_PORT = int(os.getenv("METRICS_PORT", "8000"))
@@ -88,6 +90,7 @@ def main() -> None:
         engine = FeatureEngine()
         print("[consumer] using in-memory feature engine (single instance)", flush=True)
 
+    scorer = Scorer()
     conn = db.connect()
 
     consumer = Consumer({
@@ -114,8 +117,10 @@ def main() -> None:
 
         try:
             evt = json.loads(msg.value())
-        except (ValueError, TypeError):
-            print("[consumer] skipping unparseable message", flush=True)
+        except (ValueError, TypeError) as e:
+            producer.produce(TOPIC_DLQ, key=b"unparseable",
+                           value=json.dumps({"error": str(e), "raw": msg.value().decode(errors="replace")}).encode())
+            print(f"[DLQ] unparseable message sent to {TOPIC_DLQ}: {str(e)[:80]}", flush=True)
             continue
 
         t0   = time.perf_counter()
@@ -138,10 +143,24 @@ def main() -> None:
 
         # 4) Fraud rules.
         findings = evaluate(evt, feats, engine.recent_statuses(evt["user_id"]))
-        flagged  = bool(findings)
+
+        # 4b) ML score (no-op if no model trained yet). A high score becomes
+        #     its own finding so it flows through fraud_events / alerts uniformly.
+        score = scorer.score(evt, feats)
+        ml_flagged = bool(score is not None and score >= scorer.threshold)
+        if ml_flagged:
+            findings.append({
+                "rule": "ML_SCORE",
+                "severity": scorer.severity(score),
+                "reason": f"model fraud probability {score:.2f}",
+            })
+
+        flagged = bool(findings)
 
         # 5) Processed layer + cleaned topic.
         row = _build_processed_row(evt, event_time, feats, flagged)
+        row["fraud_score"] = score
+        row["ml_flagged"] = ml_flagged
         db.insert_processed(conn, row)
         producer.produce(TOPIC_CLEANED, key=evt["user_id"].encode(),
                          value=json.dumps(evt, default=str).encode())
