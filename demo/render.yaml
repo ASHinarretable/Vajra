@@ -1,0 +1,15 @@
+# Render Blueprint — lets Render auto-configure this service from the repo.
+# In the Render dashboard: New -> Blueprint -> select this repo -> it reads this file.
+# You still set DATABASE_URL yourself (from Neon) since it's a secret.
+services:
+  - type: web
+    name: vajra-demo
+    runtime: python
+    plan: free
+    rootDir: demo
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false   # set manually in the Render dashboard (from Neon)
